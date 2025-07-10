@@ -21,24 +21,28 @@ def forecast_product_sales(product_id, csv_path="sales_CA1_sample.csv", forecast
         category = product_data['cat_id'].iloc[0]
         product_df = product_data.sort_values("date")
 
+        # Take last 90 rows or as many as available
         if len(product_df) >= 90:
             product_df = product_df.tail(90)
         elif len(product_df) >= 14:
             pass
         else:
-            print(f"WARNING: Only {len(product_df)} rows. Forecast may be unreliable.")
+            print(f"⚠️ WARNING: Only {len(product_df)} rows. Forecast may be unreliable.")
 
+        # Preprocess
         product_df['date'] = pd.to_datetime(product_df['date'])
         product_df = product_df.rename(columns={"date": "ds", "sales": "y"})
         product_df = product_df[['ds', 'y']]
         product_df = product_df[product_df['y'] > 0]
 
+        # Outlier removal using IQR
         q1, q3 = product_df['y'].quantile([0.25, 0.75])
         iqr = q3 - q1
         clean_df = product_df[(product_df['y'] >= q1 - 1.5 * iqr) & (product_df['y'] <= q3 + 1.5 * iqr)]
         if len(clean_df) >= 14:
             product_df = clean_df
 
+        # Train Prophet
         model = Prophet(daily_seasonality=True)
         model.fit(product_df)
 
@@ -46,24 +50,22 @@ def forecast_product_sales(product_id, csv_path="sales_CA1_sample.csv", forecast
         forecast = model.predict(future)
         forecast_tail = forecast.tail(forecast_days)
 
+        # Compute averages
         recent_mean = product_df.tail(forecast_days)['y'].mean()
         forecast_mean = forecast_tail['yhat'].mean()
 
-        if forecast_mean < recent_mean:
-            if category.upper() == 'FOODS':
-                discount = '10%'
-            elif category.upper() == 'HOBBIES':
-                discount = '13%'
-            elif category.upper() == 'HOUSEHOLD':
-                discount = '20%'
-            else:
-                discount = '5%'
+        # --- Floating-Point Discount Logic ---
+        if forecast_mean < recent_mean and recent_mean > 0:
+            decline_ratio = (recent_mean - forecast_mean) / recent_mean
+            discount_percent = min(25.0, max(1.0, decline_ratio * 100))
+            discount = f"{discount_percent:.1f}%"
             recommendation = "Apply discount"
             trend = "decreasing"
         else:
-            discount = '0%'
+            discount = "0%"
             recommendation = "No discount needed"
             trend = "increasing"
+        # -------------------------------------
 
         result = {
             "product_id": product_id,
